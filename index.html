@@ -1,4 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VedIQ</title>
+    <!-- React & Tailwind CDN links -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style> /* Add the CSS from the file block above here */ </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        // PASTE THE CONTENT OF App.jsx HERE
+        import React, { useState, useEffect, useRef } from 'react';
 
 // --- API & Knowledge Configuration ---
 const apiKey = ""; // API Key injected by environment at runtime
@@ -113,7 +131,7 @@ export default function App() {
             const aiMessage = { role: 'ai', text: responseText };
             setCurrentChat(prev => [...prev, aiMessage]);
         } catch (err) {
-            setError("Unable to connect to the Ayurvedic knowledge base. Please try again.");
+            setError("Unable to connect to VedIQ. Please check your connection.");
         } finally {
             setIsLoading(false);
         }
@@ -138,10 +156,8 @@ export default function App() {
     };
 
     const loadFromHistory = (question) => {
-        // Simpler approach: Start fresh with that question passed in
         setCurrentChat([{ role: 'user', text: question }]);
         setIsLoading(true);
-        
         generateContent(question).then(text => {
             setCurrentChat(prev => [...prev, { role: 'ai', text: text }]);
             setIsLoading(false);
@@ -149,7 +165,6 @@ export default function App() {
             setError("Could not reload answer.");
             setIsLoading(false);
         });
-        
         setIsSidebarOpen(false);
     };
 
@@ -393,3 +408,10 @@ export default function App() {
         </div>
     );
 };
+        // Ensure you have these lines at the end:
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
