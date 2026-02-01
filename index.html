@@ -1,0 +1,395 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+// --- API & Knowledge Configuration ---
+const apiKey = ""; // API Key injected by environment at runtime
+
+const SYSTEM_PROMPT = `
+    You are VedIQ, an expert Ayurvedic Assistant based on 'The Complete Book of Ayurvedic Home Remedies' by Vasant Lad. 
+    Your goal is to provide clear, simple, and practical answers to health questions using Ayurvedic principles.
+    
+    Key Guidelines:
+    1. Analyze questions through the lens of the three Doshas: Vata (Air/Ether), Pitta (Fire/Water), and Kapha (Water/Earth).
+    2. Suggest home remedies involving herbs (like Ginger, Turmeric, Ashwagandha), diet changes, and lifestyle adjustments.
+    3. Keep answers concise and easy to read on a mobile device. Use bullet points where appropriate.
+    4. Always prioritize safety. If a condition sounds serious, advise seeing a doctor.
+    5. Tone: Warm, knowledgeable, soothing, and encouraging.
+    
+    If the user asks for a 'Dosha Assessment', ask them a series of questions about their body frame, skin, digestion, and temperament to help identify their Prakruti.
+    If the user asks for a 'Meal Plan', ask for their dominant Dosha (or guess based on description) and current season, then provide a day's menu.
+`;
+
+// --- Icons (Inline SVGs for stability) ---
+const MenuIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>;
+const SendIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>;
+const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>;
+const HistoryIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/></svg>;
+const LeafIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#15803d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.77 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>;
+const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>;
+const SparklesIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 5h4"/><path d="M3 9h4"/></svg>;
+const UtensilsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>;
+
+export default function App() {
+    const [history, setHistory] = useState([]);
+    const [currentChat, setCurrentChat] = useState([]);
+    const [input, setInput] = useState("");
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [error, setError] = useState(null);
+    
+    const messagesEndRef = useRef(null);
+
+    // Load history from local storage on mount
+    useEffect(() => {
+        const savedHistory = localStorage.getItem('ayurveda_history');
+        if (savedHistory) {
+            setHistory(JSON.parse(savedHistory));
+        }
+    }, []);
+
+    // Save history whenever it changes
+    useEffect(() => {
+        localStorage.setItem('ayurveda_history', JSON.stringify(history));
+    }, [history]);
+
+    // Scroll to bottom of chat
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [currentChat, isLoading]);
+
+    const generateContent = async (userQuery) => {
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{ text: userQuery }]
+                    }],
+                    systemInstruction: {
+                        parts: [{ text: SYSTEM_PROMPT }]
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to get response');
+            }
+
+            const data = await response.json();
+            return data.candidates?.[0]?.content?.parts?.[0]?.text || "I apologize, I couldn't find an answer in my texts at the moment.";
+        } catch (err) {
+            console.error("API Error:", err);
+            throw err;
+        }
+    };
+
+    const handleSend = async (textOverride = null) => {
+        const textToSend = typeof textOverride === 'string' ? textOverride : input;
+        if (!textToSend.trim()) return;
+
+        const userMessage = { role: 'user', text: textToSend };
+        // Use functional update to ensure we have the latest state if needed
+        const newChat = [...currentChat, userMessage];
+        
+        setCurrentChat(newChat);
+        setInput("");
+        setIsLoading(true);
+        setError(null);
+
+        // Add to history list immediately if it's the first message of a session
+        if (currentChat.length === 0) {
+            const newHistoryItem = {
+                id: Date.now(),
+                question: textToSend,
+                timestamp: new Date().toLocaleDateString()
+            };
+            setHistory([newHistoryItem, ...history]);
+        }
+
+        try {
+            const responseText = await generateContent(textToSend);
+            const aiMessage = { role: 'ai', text: responseText };
+            setCurrentChat(prev => [...prev, aiMessage]);
+        } catch (err) {
+            setError("Unable to connect to the Ayurvedic knowledge base. Please try again.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const startNewChat = () => {
+        setCurrentChat([]);
+        setInput("");
+        setIsSidebarOpen(false); // Close sidebar on mobile
+    };
+
+    const startSpecialMode = (mode) => {
+        startNewChat();
+        let initialQuery = "";
+        if (mode === 'dosha') {
+            initialQuery = "I would like to find my Dosha. Please guide me through an assessment to determine my constitution (Prakruti).";
+        } else if (mode === 'meal') {
+            initialQuery = "I would like an Ayurvedic meal plan for today. Please ask me about my Dosha or current health state first.";
+        }
+        handleSend(initialQuery);
+        setIsSidebarOpen(false);
+    };
+
+    const loadFromHistory = (question) => {
+        // Simpler approach: Start fresh with that question passed in
+        setCurrentChat([{ role: 'user', text: question }]);
+        setIsLoading(true);
+        
+        generateContent(question).then(text => {
+            setCurrentChat(prev => [...prev, { role: 'ai', text: text }]);
+            setIsLoading(false);
+        }).catch(e => {
+            setError("Could not reload answer.");
+            setIsLoading(false);
+        });
+        
+        setIsSidebarOpen(false);
+    };
+
+    const deleteHistoryItem = (e, id) => {
+        e.stopPropagation();
+        setHistory(history.filter(item => item.id !== id));
+    };
+
+    // Detect 'Enter' key
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
+
+    return (
+        <div className="flex h-screen overflow-hidden bg-stone-50 text-slate-800 font-sans">
+            
+            {/* Mobile Overlay for Sidebar */}
+            {isSidebarOpen && (
+                <div 
+                    className="fixed inset-0 bg-black/50 z-20 md:hidden"
+                    onClick={() => setIsSidebarOpen(false)}
+                />
+            )}
+
+            {/* Sidebar / History */}
+            <aside className={`
+                fixed md:relative z-30 w-72 h-full bg-white border-r border-stone-200 flex flex-col transition-transform duration-300 ease-in-out
+                ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+            `}>
+                <div className="p-4 border-b border-stone-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <LeafIcon />
+                        <span className="font-serif font-bold text-xl text-green-800 tracking-tight">VedIQ</span>
+                    </div>
+                    <button onClick={startNewChat} className="md:hidden p-2 text-stone-500">
+                        <PlusIcon />
+                    </button>
+                </div>
+
+                <div className="p-4 space-y-2">
+                    <button 
+                        onClick={startNewChat}
+                        className="w-full flex items-center justify-center gap-2 bg-green-700 hover:bg-green-800 text-white py-3 px-4 rounded-xl shadow-sm transition-all active:scale-95"
+                    >
+                        <PlusIcon />
+                        <span className="font-medium">New Question</span>
+                    </button>
+                </div>
+
+                <div className="px-4 pb-2">
+                    <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2 pl-2">AI Tools</h3>
+                    <button 
+                        onClick={() => startSpecialMode('dosha')}
+                        className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-stone-100 text-stone-700 transition-colors text-left text-sm font-medium"
+                    >
+                        <span className="p-1 bg-purple-100 text-purple-600 rounded-md"><SparklesIcon /></span>
+                        Find My Dosha
+                    </button>
+                    <button 
+                        onClick={() => startSpecialMode('meal')}
+                        className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-stone-100 text-stone-700 transition-colors text-left text-sm font-medium"
+                    >
+                        <span className="p-1 bg-orange-100 text-orange-600 rounded-md"><UtensilsIcon /></span>
+                        Meal Planner
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-4 pb-4">
+                    <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3 pl-2 mt-4">History</h3>
+                    {history.length === 0 ? (
+                        <p className="text-sm text-stone-400 italic pl-2">No questions yet.</p>
+                    ) : (
+                        <div className="space-y-2">
+                            {history.map((item) => (
+                                <div 
+                                    key={item.id}
+                                    onClick={() => loadFromHistory(item.question)}
+                                    className="group flex items-center justify-between p-3 rounded-lg hover:bg-stone-100 cursor-pointer transition-colors"
+                                >
+                                    <div className="flex items-center gap-3 overflow-hidden">
+                                        <HistoryIcon />
+                                        <span className="text-sm text-stone-700 truncate">{item.question}</span>
+                                    </div>
+                                    <button 
+                                        onClick={(e) => deleteHistoryItem(e, item.id)}
+                                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 text-red-500 rounded transition-all"
+                                    >
+                                        <TrashIcon />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                
+                <div className="p-4 border-t border-stone-100 text-xs text-stone-400 text-center">
+                    Based on Dr. Vasant Lad's teachings
+                </div>
+            </aside>
+
+            {/* Main Chat Area */}
+            <main className="flex-1 flex flex-col h-full w-full relative">
+                
+                {/* Header (Mobile) */}
+                <header className="md:hidden h-16 bg-white/80 backdrop-blur-md border-b border-stone-100 flex items-center justify-between px-4 sticky top-0 z-10">
+                    <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-stone-600">
+                        <MenuIcon />
+                    </button>
+                    <span className="font-serif font-bold text-lg text-green-800">VedIQ</span>
+                    <div className="w-8"></div> {/* Spacer for centering */}
+                </header>
+
+                {/* Chat Messages */}
+                <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+                    {currentChat.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center px-4 animate-in fade-in zoom-in duration-500">
+                            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-6">
+                                <LeafIcon />
+                            </div>
+                            <h2 className="font-serif text-2xl md:text-3xl font-bold text-stone-800 mb-2">
+                                Namasté
+                            </h2>
+                            <p className="text-stone-500 max-w-md mb-8">
+                                I am VedIQ, your Ayurvedic health assistant. How can I help you achieve balance today?
+                            </p>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl">
+                                <button 
+                                    onClick={() => startSpecialMode('dosha')}
+                                    className="bg-white border border-stone-200 p-4 rounded-xl hover:border-purple-300 hover:bg-purple-50 transition-all shadow-sm text-left group"
+                                >
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="p-2 bg-purple-100 text-purple-600 rounded-lg group-hover:bg-purple-200"><SparklesIcon /></div>
+                                        <span className="font-semibold text-stone-800">Find My Dosha</span>
+                                    </div>
+                                    <p className="text-xs text-stone-500">Discover your unique mind-body constitution (Prakruti).</p>
+                                </button>
+
+                                <button 
+                                    onClick={() => startSpecialMode('meal')}
+                                    className="bg-white border border-stone-200 p-4 rounded-xl hover:border-orange-300 hover:bg-orange-50 transition-all shadow-sm text-left group"
+                                >
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="p-2 bg-orange-100 text-orange-600 rounded-lg group-hover:bg-orange-200"><UtensilsIcon /></div>
+                                        <span className="font-semibold text-stone-800">Meal Planner</span>
+                                    </div>
+                                    <p className="text-xs text-stone-500">Get a balanced daily menu tailored to your needs.</p>
+                                </button>
+                                
+                                {["Remedy for sore throat?", "Diet for Pitta dosha", "Morning routine tips", "Sleep problems"].map(q => (
+                                    <button 
+                                        key={q}
+                                        onClick={() => handleSend(q)}
+                                        className="bg-white border border-stone-200 p-4 rounded-xl hover:border-green-500 hover:text-green-700 transition-colors shadow-sm text-left text-sm text-stone-600"
+                                    >
+                                        {q}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        currentChat.map((msg, index) => (
+                            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div 
+                                    className={`
+                                        max-w-[85%] md:max-w-[70%] p-4 rounded-2xl text-sm md:text-base shadow-sm
+                                        ${msg.role === 'user' 
+                                            ? 'bg-green-700 text-white rounded-br-none' 
+                                            : 'bg-white text-stone-800 border border-stone-100 rounded-bl-none prose'}
+                                    `}
+                                >
+                                    {msg.role === 'ai' ? (
+                                        <div dangerouslySetInnerHTML={{ 
+                                            __html: msg.text
+                                                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                                                .replace(/\n/g, '<br />') // New lines
+                                                .replace(/- /g, '• ') // Bullets
+                                        }} />
+                                    ) : (
+                                        msg.text
+                                    )}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                    
+                    {isLoading && (
+                        <div className="flex justify-start">
+                            <div className="bg-white border border-stone-100 p-4 rounded-2xl rounded-bl-none shadow-sm flex items-center gap-1">
+                                <div className="animate-bounce w-2 h-2 bg-stone-400 rounded-full" style={{ animationDelay: '0s' }}></div>
+                                <div className="animate-bounce w-2 h-2 bg-stone-400 rounded-full" style={{ animationDelay: '0.1s' }}></div>
+                                <div className="animate-bounce w-2 h-2 bg-stone-400 rounded-full" style={{ animationDelay: '0.2s' }}></div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {error && (
+                        <div className="flex justify-center">
+                            <div className="bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm">
+                                {error}
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div ref={messagesEndRef} />
+                </div>
+
+                {/* Input Area */}
+                <div className="p-4 bg-white border-t border-stone-100 md:px-8 md:pb-8">
+                    <div className="max-w-4xl mx-auto relative flex items-center">
+                        <input
+                            type="text"
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Ask about a remedy..."
+                            className="w-full bg-stone-50 border-0 rounded-2xl py-4 pl-5 pr-14 text-stone-800 placeholder-stone-400 focus:ring-2 focus:ring-green-500/20 focus:bg-white transition-all shadow-sm"
+                            disabled={isLoading}
+                        />
+                        <button 
+                            onClick={() => handleSend()}
+                            disabled={!input.trim() || isLoading}
+                            className={`
+                                absolute right-2 p-2 rounded-xl transition-all
+                                ${input.trim() && !isLoading 
+                                    ? 'bg-green-700 text-white hover:bg-green-800 shadow-md' 
+                                    : 'bg-stone-200 text-stone-400 cursor-not-allowed'}
+                            `}
+                        >
+                            <SendIcon />
+                        </button>
+                    </div>
+                    <p className="text-center text-[10px] text-stone-400 mt-2">
+                        For informational purposes only. Consult a physician for serious medical conditions.
+                    </p>
+                </div>
+            </main>
+        </div>
+    );
+};
